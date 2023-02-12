@@ -1,3 +1,6 @@
+from cog import BasePredictor, Input, Path
+import torch
+
 import os, sys
 import os.path
 import torch
@@ -13,58 +16,10 @@ import time
 import subprocess as sp
 import pickle
 
-
 class Object():
     pass
-opt = Object()
-opt.crop_size = 512
-opt.double_size = True if opt.crop_size == 512 else False
-# DAVIS dataloader
-DAVIS_ROOT = './DAVIS_demo'
-DTset = DAVIS(DAVIS_ROOT, imset='2016/demo_davis.txt', 
-              size=(opt.crop_size, opt.crop_size))
-DTloader = data.DataLoader(DTset, batch_size=1, shuffle=False, num_workers=1)
 
-opt.search_range = 4 # fixed as 4: search range for flow subnetworks
-opt.pretrain_path = 'results/vinet_agg_rec/save_agg_rec_512.pth'
-opt.result_path = 'results/vinet_agg_rec'
-
-opt.model = 'vinet_final'
-opt.batch_norm = False
-opt.no_cuda = False # use GPU
-opt.no_train = True
-opt.test = True
-opt.t_stride = 3
-opt.loss_on_raw = False
-opt.prev_warp = True
-opt.save_image = True
-opt.save_video = False
-if opt.save_video:
-    import pims
-
-
-def createVideoClip(clip, folder, name, size=[512,512]):
-
-    vf = clip.shape[0]
-    command = [ 'ffmpeg',
-    '-y',  # overwrite output file if it exists
-    '-f', 'rawvideo',
-    '-s', '%dx%d'%(size[1],size[0]), #'512x512', # size of one frame
-    '-pix_fmt', 'rgb24',
-    '-r', '15', # frames per second
-    '-an',  # Tells FFMPEG not to expect any audio
-    '-i', '-',  # The input comes from a pipe
-    '-vcodec', 'libx264',
-    '-b:v', '1500k',
-    '-vframes', str(vf), # 5*25
-    '-s', '%dx%d'%(size[1],size[0]), #'256x256', # size of one frame
-    folder+'/'+name ]
-    #sfolder+'/'+name 
-    pipe = sp.Popen( command, stdin=sp.PIPE, stderr=sp.PIPE)
-    out, err = pipe.communicate(clip.tostring())
-    pipe.wait()
-    pipe.terminate()
-    print(err)
+opt = None
 
 def to_img(x):
     tmp = (x[0,:,0,:,:].cpu().data.numpy().transpose((1,2,0))+1)/2
@@ -76,18 +31,39 @@ def to_var(x, volatile=False):
         x = x.cuda()
     return Variable(x, volatile=volatile)
 
-model, _ = generate_model(opt)
-print('Number of model parameters: {}'.format(
-      sum([p.data.nelement() for p in model.parameters()])))
+model = None
 
-model.eval()
-ts = opt.t_stride
-folder_name = 'davis_%d'%(int(opt.crop_size))
-pre_run = 30
+class Predictor(BasePredictor):
+    def setup(self):
+        global model
+        global opt
 
-with torch.no_grad():
-    for seq, (inputs, masks, info) in enumerate(DTloader):
+        opt = Object()
+        opt.crop_size = 512
+        opt.double_size = True if opt.crop_size == 512 else False
+        # DAVIS dataloader
 
+        opt.search_range = 4 # fixed as 4: search range for flow subnetworks
+        opt.pretrain_path = 'results/vinet_agg_rec/save_agg_rec_512.pth'
+        opt.result_path = 'results/vinet_agg_rec'
+
+        opt.model = 'vinet_final'
+        opt.batch_norm = False
+        opt.no_cuda = False # use GPU
+        opt.no_train = True
+        opt.test = True
+        opt.t_stride = 3
+        opt.loss_on_raw = False
+        opt.prev_warp = True
+        opt.save_image = True
+        opt.save_video = False
+        if opt.save_video:
+            import pims
+
+        model, _ = generate_model(opt)
+
+
+    def predict(self, inputs: Path = Input(description="video"), mask: Path = Input(description="path")):
         idx = torch.LongTensor([i for i in range(pre_run-1, -1, -1)])
         pre_inputs = inputs[:,:,:pre_run].index_select(2, idx)
         pre_masks = masks[:,:,:pre_run].index_select(2, idx)
@@ -192,12 +168,6 @@ with torch.no_grad():
                         save_path,'%05d.png'%(t - pre_run)), out_frame)
                 out_frames.append(out_frame[:,:,::-1])
 
-        if opt.save_video:
-            final_clip = np.stack(out_frames)
-            video_path = os.path.join(opt.result_path, folder_name)
-            if not os.path.exists(video_path):
-                os.makedirs(video_path)
+        final_clip = np.stack(out_frames)
+        return final_clip.tostring()
 
-            createVideoClip(final_clip, video_path, '%s.mp4'%(
-                seq_name), [opt.crop_size, opt.crop_size])
-            print('Predicted video clip {} saving'.format(folder_name))   

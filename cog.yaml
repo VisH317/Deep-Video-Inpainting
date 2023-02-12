@@ -1,0 +1,6 @@
+build:
+  python_version: "3.8"
+  python_packages:
+    - pytorch==1.4
+    - torchvision
+predict: "cogsetup.py:Predictor"
